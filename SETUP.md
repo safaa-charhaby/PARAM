@@ -57,20 +57,19 @@ pip install -r requirements.txt
 
 > ⚠️ L'installation peut prendre plusieurs minutes (torch, transformers, etc. sont lourds).
 
-### 5. Configurer les variables d'environnement
+### 5. Variables d'environnement (optionnel)
 
-Crée un fichier `.env` dans le dossier `backend/` avec le contenu suivant :
+Le projet fonctionne **sans fichier `.env`** grâce aux valeurs par défaut intégrées dans le code.
+
+Par défaut, il se connecte à MongoDB sur `mongodb://localhost:27017`.
+
+Si tu utilises **MongoDB Atlas** (cloud) au lieu d'un MongoDB local, crée un fichier `.env` dans `backend/` :
 
 ```env
-MONGODB_URL=mongodb://localhost:27017
-DATABASE_NAME=pfe_sbs
-SECRET_KEY=une_cle_secrete_longue_et_aleatoire
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
-GEMINI_API_KEY=ta_cle_api_gemini   # si tu utilises Gemini
+MONGO_DETAILS=mongodb+srv://utilisateur:motdepasse@cluster.mongodb.net/paramiq_db
 ```
 
-> Demande la clé API Gemini à ton équipe si nécessaire.
+> ℹ️ Pour une installation locale standard, tu peux sauter cette étape.
 
 ### 6. Lancer le backend
 ```bash
