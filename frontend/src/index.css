@@ -1,0 +1,93 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Inter:wght@300;400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply font-sans bg-white text-text m-0 overflow-x-hidden;
+    font-size: 15px;
+    line-height: 1.6;
+  }
+  h1, h2, h3, h4, h5 {
+    @apply font-heading leading-tight;
+  }
+
+  /* SCROLLBAR */
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-bg;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border-2 rounded-sm;
+  }
+}
+
+@layer components {
+  /* Common Buttons from HTML */
+  .btn {
+    @apply inline-flex items-center justify-center gap-[6px] px-[18px] py-[8px] rounded-lg text-[13px] font-semibold cursor-pointer border-none transition-all font-sans whitespace-nowrap;
+  }
+  .btn-magenta {
+    @apply bg-magenta text-white;
+  }
+  .btn-magenta:hover {
+    @apply bg-magenta-h -translate-y-[1px];
+    box-shadow: 0 6px 20px rgba(217,70,239,0.35);
+  }
+  .btn-deepBlue {
+    @apply bg-deepBlue text-white;
+  }
+  .btn-deepBlue:hover {
+    @apply bg-deepBlue-3;
+  }
+  .btn-outline {
+    background: transparent;
+    border: 1.5px solid var(--border-2);
+    @apply text-text;
+  }
+  .btn-outline:hover {
+    @apply border-deepBlue bg-bg;
+  }
+
+  /* Specific Layout Details extracted from HTML */
+  .card {
+    @apply bg-white border border-border rounded-r p-[18px];
+  }
+  .card-title {
+    @apply text-[12px] font-bold uppercase tracking-widest text-text-3 mb-[14px];
+  }
+
+  /* Badge styling */
+  .badge {
+    @apply inline-flex items-center gap-[3px] px-[7px] py-[2px] rounded text-[10px] font-bold tracking-wider;
+  }
+  .badge-ok { background: #dcfce7; color: #15803d; }
+  .badge-err { background: #fee2e2; color: #b91c1c; }
+  .badge-warn { background: #fef9c3; color: #a16207; }
+  .badge-info { background: #dbeafe; color: #1d4ed8; }
+  
+  /* Shared Table styling */
+  .data-table {
+    @apply w-full border-collapse text-[12px];
+  }
+  .data-table th {
+    @apply text-left px-[12px] py-[8px] border-b-2 border-border text-[10px] uppercase tracking-widest text-text-3 font-bold;
+  }
+  .data-table td {
+    @apply px-[12px] py-[9px] border-b border-bg-2 text-text-2;
+  }
+  .data-table tr:hover td {
+    @apply bg-bg;
+  }
+}
