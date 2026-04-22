@@ -9,14 +9,14 @@ from typing import Any, Dict, List
 
 import numpy as np
 from bson import ObjectId
-from fastapi import APIRouter, Body, File, HTTPException, UploadFile, Header
+from fastapi import APIRouter, Body, File, HTTPException, UploadFile, Header, Depends
+from .auth_keycloak import get_current_user
 from fastapi.encoders import jsonable_encoder
 from pymongo.errors import PyMongoError
 from sentence_transformers import SentenceTransformer, util
 
 from .database import (
     activity_events_collection,
-    auth_sessions_collection,
     comparison_runs_collection,
     converter_runs_collection,
     generator_runs_collection,
@@ -59,42 +59,6 @@ def _normalize_email(email: str) -> str:
     return _safe_text(email).lower()
 
 
-def _hash_password(password: str) -> str:
-    salt = os.urandom(16)
-    digest = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1)
-    return f"scrypt${salt.hex()}${digest.hex()}"
-
-
-def _verify_password(password: str, hashed_password: str) -> bool:
-    try:
-        algorithm, salt_hex, digest_hex = hashed_password.split("$", 2)
-        if algorithm != "scrypt":
-            return False
-        salt = bytes.fromhex(salt_hex)
-        expected = bytes.fromhex(digest_hex)
-        computed = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1)
-        return secrets.compare_digest(computed, expected)
-    except Exception:
-        return False
-
-
-def _extract_bearer_token(authorization: str | None) -> str:
-    if not authorization:
-        return ""
-    prefix = "bearer "
-    if authorization.lower().startswith(prefix):
-        return authorization[len(prefix):].strip()
-    return ""
-
-
-def _as_public_user(user_doc: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "_id": str(user_doc.get("_id")),
-        "name": _safe_text(user_doc.get("name")),
-        "email": _safe_text(user_doc.get("email")),
-        "role": _safe_text(user_doc.get("role")),
-    }
-
 
 def _mongo_unavailable_detail() -> str:
     return "MongoDB indisponible. Vérifiez MONGO_DETAILS et que le serveur MongoDB est démarré."
@@ -128,31 +92,6 @@ async def _push_activity(event_type: str, title: str, payload: Dict[str, Any] | 
     except Exception:
         # Activity logging must not block business endpoints.
         return
-
-
-async def _resolve_user_from_token(token: str) -> Dict[str, Any] | None:
-    if not token:
-        return None
-
-    session = await auth_sessions_collection.find_one({"token": token})
-    if not session:
-        return None
-
-    expires_at = session.get("expires_at")
-    if not expires_at or expires_at <= _utc_now():
-        await auth_sessions_collection.delete_one({"_id": session["_id"]})
-        return None
-
-    user_id = session.get("user_id")
-    if not user_id:
-        return None
-
-    user = await users_collection.find_one({"_id": user_id})
-    if not user:
-        return None
-    if not user.get("is_active", True):
-        return None
-    return user
 
 
 def _safe_text(value: Any) -> str:
@@ -273,115 +212,9 @@ def _build_anomaly_issue(row: Dict[str, Any]) -> Dict[str, Any]:
 
 # --------- AUTHENTIFICATION (MONGODB) ---------
 
-@router.post("/auth/register", response_description="Créer un compte utilisateur", response_model=AuthResponse)
-async def register_user(payload: RegisterRequest = Body(...)):
-    name = _safe_text(payload.name)
-    email = _normalize_email(payload.email)
-    password = payload.password
-    role = _safe_text(payload.role).lower() or "analyst"
-
-    if len(name) < 2:
-        raise HTTPException(status_code=400, detail="Nom invalide")
-    if "@" not in email:
-        raise HTTPException(status_code=400, detail="Email invalide")
-    if len(password) < 8:
-        raise HTTPException(status_code=400, detail="Le mot de passe doit contenir au moins 8 caractères")
-    if role not in {"admin", "analyst"}:
-        raise HTTPException(status_code=400, detail="Rôle invalide")
-
-    try:
-        existing = await users_collection.find_one({"email": email})
-    except PyMongoError as exc:
-        _raise_mongo_unavailable(exc)
-
-    if existing:
-        raise HTTPException(status_code=409, detail="Un compte existe déjà avec cet email")
-
-    user_doc = {
-        "name": name,
-        "email": email,
-        "password_hash": _hash_password(password),
-        "role": role,
-        "is_active": True,
-        "created_at": _utc_now(),
-    }
-    try:
-        insert_result = await users_collection.insert_one(user_doc)
-    except PyMongoError as exc:
-        _raise_mongo_unavailable(exc)
-
-    user_doc["_id"] = insert_result.inserted_id
-
-    token = secrets.token_urlsafe(48)
-    try:
-        await auth_sessions_collection.insert_one(
-            {
-                "token": token,
-                "user_id": insert_result.inserted_id,
-                "created_at": _utc_now(),
-                "expires_at": _utc_now() + timedelta(hours=SESSION_DURATION_HOURS),
-            }
-        )
-    except PyMongoError as exc:
-        _raise_mongo_unavailable(exc)
-
-    return {"token": token, "user": _as_public_user(user_doc)}
-
-
-@router.post("/auth/login", response_description="Connexion utilisateur", response_model=AuthResponse)
-async def login_user(payload: LoginRequest = Body(...)):
-    email = _normalize_email(payload.email)
-    password = payload.password
-
-    try:
-        user_doc = await users_collection.find_one({"email": email})
-    except PyMongoError as exc:
-        _raise_mongo_unavailable(exc)
-
-    if not user_doc or not _verify_password(password, _safe_text(user_doc.get("password_hash"))):
-        raise HTTPException(status_code=401, detail="Email ou mot de passe invalide")
-
-    if not user_doc.get("is_active", True):
-        raise HTTPException(status_code=403, detail="Compte désactivé")
-
-    token = secrets.token_urlsafe(48)
-    try:
-        await auth_sessions_collection.insert_one(
-            {
-                "token": token,
-                "user_id": user_doc["_id"],
-                "created_at": _utc_now(),
-                "expires_at": _utc_now() + timedelta(hours=SESSION_DURATION_HOURS),
-            }
-        )
-    except PyMongoError as exc:
-        _raise_mongo_unavailable(exc)
-
-    return {"token": token, "user": _as_public_user(user_doc)}
-
-
-@router.get("/auth/me", response_description="Profil utilisateur courant", response_model=UserPublic)
-async def auth_me(authorization: str | None = Header(default=None)):
-    token = _extract_bearer_token(authorization)
-    try:
-        user = await _resolve_user_from_token(token)
-    except PyMongoError as exc:
-        _raise_mongo_unavailable(exc)
-
-    if not user:
-        raise HTTPException(status_code=401, detail="Session invalide ou expirée")
-    return _as_public_user(user)
-
-
-@router.post("/auth/logout", response_description="Déconnexion utilisateur")
-async def auth_logout(authorization: str | None = Header(default=None)):
-    token = _extract_bearer_token(authorization)
-    if token:
-        try:
-            await auth_sessions_collection.delete_many({"token": token})
-        except PyMongoError as exc:
-            _raise_mongo_unavailable(exc)
-    return {"ok": True}
+@router.get("/auth/me", response_description="Profil utilisateur courant")
+async def auth_me(current_user: dict = Depends(get_current_user)):
+    return current_user
 
 # --------- ADMINISTRATION UTILISATEURS ---------
 
@@ -403,14 +236,8 @@ class AdminUserUpdate(BaseModel):
     password: Optional[str] = None
 
 @router.get("/admin/users", response_description="Lister tous les utilisateurs")
-async def admin_get_users(authorization: str | None = Header(default=None)):
-    token = _extract_bearer_token(authorization)
-    try:
-        user = await _resolve_user_from_token(token)
-    except PyMongoError as exc:
-        _raise_mongo_unavailable(exc)
-        
-    if not user or user.get("role") != "admin":
+async def admin_get_users(current_user: dict = Depends(get_current_user)):
+    if not current_user or current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs")
         
     try:
@@ -430,10 +257,8 @@ async def admin_get_users(authorization: str | None = Header(default=None)):
 
 
 @router.post("/admin/users", response_description="Créer un utilisateur par un admin")
-async def admin_create_user(payload: AdminUserCreate = Body(...), authorization: str | None = Header(default=None)):
-    token = _extract_bearer_token(authorization)
-    user = await _resolve_user_from_token(token)
-    if not user or user.get("role") != "admin":
+async def admin_create_user(payload: AdminUserCreate = Body(...), current_user: dict = Depends(get_current_user)):
+    if not current_user or current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs")
         
     email = _normalize_email(payload.email)
@@ -444,7 +269,7 @@ async def admin_create_user(payload: AdminUserCreate = Body(...), authorization:
     user_doc = {
         "name": _safe_text(payload.name),
         "email": email,
-        "password_hash": _hash_password(payload.password),
+        "password_hash": "managed_by_keycloak",
         "role": payload.role if payload.role in ["admin", "analyst"] else "analyst",
         "is_active": payload.status == "active",
         "created_at": _utc_now(),
@@ -455,10 +280,8 @@ async def admin_create_user(payload: AdminUserCreate = Body(...), authorization:
 
 
 @router.put("/admin/users/{user_id}", response_description="Modifier un utilisateur")
-async def admin_update_user(user_id: str, payload: AdminUserUpdate = Body(...), authorization: str | None = Header(default=None)):
-    token = _extract_bearer_token(authorization)
-    user = await _resolve_user_from_token(token)
-    if not user or user.get("role") != "admin":
+async def admin_update_user(user_id: str, payload: AdminUserUpdate = Body(...), current_user: dict = Depends(get_current_user)):
+    if not current_user or current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs")
         
     update_fields = {
@@ -468,7 +291,7 @@ async def admin_update_user(user_id: str, payload: AdminUserUpdate = Body(...), 
         "is_active": payload.status == "active",
     }
     if payload.password and len(payload.password) >= 6:
-        update_fields["password_hash"] = _hash_password(payload.password)
+        update_fields["password_hash"] = "managed_by_keycloak"
         
     res = await users_collection.update_one({"_id": ObjectId(user_id)}, {"$set": update_fields})
     if res.matched_count == 0:
@@ -477,13 +300,11 @@ async def admin_update_user(user_id: str, payload: AdminUserUpdate = Body(...), 
 
 
 @router.delete("/admin/users/{user_id}", response_description="Supprimer un utilisateur")
-async def admin_delete_user(user_id: str, authorization: str | None = Header(default=None)):
-    token = _extract_bearer_token(authorization)
-    user = await _resolve_user_from_token(token)
-    if not user or user.get("role") != "admin":
+async def admin_delete_user(user_id: str, current_user: dict = Depends(get_current_user)):
+    if not current_user or current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs")
         
-    if str(user["_id"]) == user_id:
+    if str(current_user["email"]) == user_id:
         raise HTTPException(status_code=400, detail="Vous ne pouvez pas supprimer votre propre compte")
         
     res = await users_collection.delete_one({"_id": ObjectId(user_id)})

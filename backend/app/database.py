@@ -11,7 +11,6 @@ database = client.paramiq_db
 mapping_collection = database.get_collection("mappings")
 chat_collection = database.get_collection("chats")
 users_collection = database.get_collection("users")
-auth_sessions_collection = database.get_collection("auth_sessions")
 validation_runs_collection = database.get_collection("validation_runs")
 comparison_runs_collection = database.get_collection("comparison_runs")
 pipeline_runs_collection = database.get_collection("pipeline_runs")

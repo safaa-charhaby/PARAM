@@ -1,0 +1,61 @@
+{
+  "id": "paramiq",
+  "realm": "paramiq",
+  "enabled": true,
+  "users": [
+    {
+      "username": "admin@paramiq.local",
+      "email": "admin@paramiq.local",
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["admin"]
+    },
+    {
+      "username": "analyst@paramiq.local",
+      "email": "analyst@paramiq.local",
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "analyst123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["analyst"]
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "admin",
+        "description": "Administrator role"
+      },
+      {
+        "name": "analyst",
+        "description": "Analyst role"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "paramiq-frontend",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": [
+        "http://localhost:5173/*"
+      ],
+      "webOrigins": [
+        "http://localhost:5173"
+      ]
+    }
+  ]
+}

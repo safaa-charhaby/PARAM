@@ -6,13 +6,13 @@ import Anomalies from './pages/Anomalies'
 import AIAssistant from './pages/AIAssistant'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
-import Register from './pages/Register'
 import Generator from './pages/Generator'
 import Converter from './pages/Converter'
 import Pipeline from './pages/Pipeline'
 import Admin from './pages/Admin'
 import Layout from './components/Layout'
 import { AnalysisProvider } from './contexts/AnalysisContext'
+import { keycloak } from './keycloak'
 
 export type UserRole = 'admin' | 'analyst' | null;
 
@@ -23,14 +23,6 @@ type AuthUser = {
   role: Exclude<UserRole, null>;
 };
 
-type AuthPayload = {
-  token: string;
-  user: AuthUser;
-};
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-const TOKEN_STORAGE_KEY = 'paramiq_token';
-
 function App() {
   const [currentPage, setCurrentPage] = useState('home');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -38,85 +30,65 @@ function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [isCheckingSession, setIsCheckingSession] = useState(true);
 
-  const handleAuth = (payload: AuthPayload) => {
-    localStorage.setItem(TOKEN_STORAGE_KEY, payload.token);
-    setIsAuthenticated(true);
-    setUserRole(payload.user.role);
-    setAuthUser(payload.user);
-    setCurrentPage('dashboard');
-  };
-
-  const handleLogout = async () => {
-    const token = localStorage.getItem(TOKEN_STORAGE_KEY);
-    if (token) {
-      try {
-        await fetch(`${API_BASE}/api/auth/logout`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-        });
-      } catch {
-        // Keep local logout flow even if API call fails.
-      }
-    }
-
-    localStorage.removeItem(TOKEN_STORAGE_KEY);
-    setIsAuthenticated(false);
-    setUserRole(null);
-    setAuthUser(null);
-    setCurrentPage('home');
-  };
-
   useEffect(() => {
-    const bootstrapSession = async () => {
-      const token = localStorage.getItem(TOKEN_STORAGE_KEY);
-      if (!token) {
-        setIsCheckingSession(false);
-        return;
-      }
-
-      try {
-        const response = await fetch(`${API_BASE}/api/auth/me`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-
-        if (!response.ok) {
-          throw new Error('Session expirée');
+    keycloak.init({ onLoad: 'check-sso', checkLoginIframe: false }).then(authenticated => {
+      setIsAuthenticated(authenticated);
+      if (authenticated && keycloak.tokenParsed) {
+        const realmAccess = keycloak.tokenParsed.realm_access as { roles: string[] } | undefined;
+        let role: UserRole = 'analyst';
+        if (realmAccess?.roles.includes('admin')) {
+          role = 'admin';
         }
-
-        const user = await response.json();
-        setIsAuthenticated(true);
-        setUserRole(user.role as UserRole);
+        
+        setUserRole(role);
         setAuthUser({
-          id: user._id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
+          id: keycloak.tokenParsed.sub || '',
+          name: keycloak.tokenParsed.name || keycloak.tokenParsed.preferred_username || '',
+          email: keycloak.tokenParsed.email || keycloak.tokenParsed.preferred_username || '',
+          role: role,
         });
-        setCurrentPage('dashboard');
-      } catch {
-        localStorage.removeItem(TOKEN_STORAGE_KEY);
-        setIsAuthenticated(false);
-        setUserRole(null);
-        setAuthUser(null);
-      } finally {
-        setIsCheckingSession(false);
+        
+        // Save token to localStorage for backend requests
+        if (keycloak.token) {
+          localStorage.setItem('paramiq_token', keycloak.token);
+        }
+        
+        if (currentPage === 'home' || currentPage === 'login') {
+          setCurrentPage('dashboard');
+        }
       }
-    };
+      setIsCheckingSession(false);
+    }).catch(err => {
+      console.error('Failed to initialize Keycloak', err);
+      setIsCheckingSession(false);
+    });
 
-    bootstrapSession();
+    // Auto-refresh token
+    const refreshInterval = setInterval(() => {
+      if (keycloak.authenticated) {
+        keycloak.updateToken(30).then(refreshed => {
+          if (refreshed && keycloak.token) {
+            localStorage.setItem('paramiq_token', keycloak.token);
+          }
+        }).catch(() => {
+          keycloak.logout();
+        });
+      }
+    }, 10000);
+
+    return () => clearInterval(refreshInterval);
   }, []);
 
-  useEffect(() => {
-    if (isAuthenticated && ['home', 'login', 'register'].includes(currentPage)) {
-      setCurrentPage('dashboard');
-    }
-  }, [isAuthenticated, currentPage]);
+  const handleLogout = () => {
+    localStorage.removeItem('paramiq_token');
+    keycloak.logout({ redirectUri: window.location.origin });
+  };
 
   if (isCheckingSession) {
     return (
       <div className="min-h-screen bg-bg flex items-center justify-center p-6 font-sans">
         <div className="bg-white border border-border rounded-xl px-6 py-4 text-deepBlue font-bold shadow-sm">
-          Vérification de la session...
+          Initialisation de la connexion...
         </div>
       </div>
     );
@@ -124,12 +96,8 @@ function App() {
 
   // Prevent accessing protected routes without auth
   if (!isAuthenticated) {
-    if (currentPage === 'login') return <Login onAuth={handleAuth} onNavigate={setCurrentPage} />
-    if (currentPage === 'register') return <Register onAuth={handleAuth} onNavigate={setCurrentPage} />
     if (currentPage === 'home') return <Landing onNavigate={setCurrentPage} />
-    
-    // Default to login if they try to access any protected page (dashboard, etc)
-    return <Login onAuth={handleAuth} onNavigate={setCurrentPage} />
+    return <Login />
   }
 
   const renderPage = () => {
